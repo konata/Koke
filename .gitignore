@@ -1,0 +1,35 @@
+*.iml
+.DS_Store
+.externalNativeBuild
+.cxx
+
+# Instances are rubber-stamped from Template/ and regeneratable via `./gradlew make`.
+# Ignore every top-level dir except the two that are the single source of truth.
+/*/
+!/shared/
+!/Template/
+
+# Per-instance generated/transient (for Template/ and anything else tracked)
+**/local.properties
+**/.gradle/
+**/build/
+**/captures/
+**/.idea/caches/
+**/.idea/libraries/
+**/.idea/modules.xml
+**/.idea/workspace.xml
+**/.idea/navEditor.xml
+**/.idea/assetWizardSettings.xml
+
+# Runtime-materialized symlinks into AOSP sources
+**/externals/*
+!**/externals/.gitkeep
+
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+# Ignore Kotlin plugin data
+.kotlin

@@ -1,0 +1,19 @@
+ext.modules = [
+    applicationId : 'com.android.permissioncontroller',
+    manifest      : 'Permission/PermissionController/AndroidManifest.xml',
+    src           : 'src|java',
+    extraSymlinks : [],
+]
+
+dependencies {
+    implementation pin('androidx.appcompat_appcompat')
+    implementation pin('androidx.annotation_annotation')
+    implementation pin('androidx.core_core')
+    implementation pin('androidx.fragment_fragment')
+    implementation pin('androidx.recyclerview_recyclerview')
+    implementation pin('androidx.transition_transition')
+    implementation pin('androidx.leanback_leanback')
+    implementation pin('androidx.legacy_legacy-support-core-ui')
+    implementation pin('androidx.legacy_legacy-support-core-utils')
+    implementation pin('androidx.media_media')
+}

@@ -1,0 +1,6 @@
+ext.modules = [
+    applicationId : 'com.android.providers.media.module',
+    manifest      : 'MediaProvider/AndroidManifest.xml',
+    src           : 'src|java',
+    extraSymlinks : [],
+]

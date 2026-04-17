@@ -1,0 +1,83 @@
+// Repo-level tasks for Koke: scaffold module configs and materialize instances.
+// Runs from the Koke repo root (this is NOT applied from instances).
+
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+
+def write = { File f, String body -> if (!f.exists()) { f.parentFile.mkdirs(); f.text = body; println "+ ${f}" } }
+
+tasks.register('config') {
+    group = 'koke'
+    description = 'Scaffold shared/modules/<Name>/{_,<Ver>}.gradle skeleton(s). Requires -Pmodule=<Name>[@<Ver>].'
+    def modulesRoot = new File(rootDir, 'shared/modules')
+    def identifier = findProperty('module') as String
+    doLast {
+        if (!identifier) throw new GradleException(':config requires -Pmodule=<Name>[@<Ver>]')
+        def (module, version) = identifier.split('@', 2) as List
+        write(new File(modulesRoot, "${module}/_.gradle"), """\
+                |// ${module} — base module config (shared across versions, if any).
+                |ext.modules = [
+                |    applicationId : 'koke',
+                |    manifest      : null,
+                |    src           : 'src|java',
+                |    extraSymlinks : [],
+                |]
+                |
+                |dependencies {
+                |    // implementation pin('androidx.appcompat_appcompat')
+                |}
+                |""".stripMargin())
+        if (version) write(new File(modulesRoot, "${module}/${version}.gradle"), """\
+                |// ${module} @ ${version}
+                |ext.modules += [
+                |    sdk : 35,
+                |]
+                |
+                |dependencies {
+                |    // implementation pin('androidx.work_work-runtime')
+                |}
+                |""".stripMargin())
+    }
+}
+
+tasks.register('make') {
+    group = 'koke'
+    description = 'Rubber-stamp Template into instance dir(s). -Pmodule=<Name>[@<Ver>] for one, omit for bulk.'
+    def repo = rootDir
+    def modulesRoot = new File(repo, 'shared/modules')
+    def template = new File(repo, 'Template')
+    def identifier = findProperty('module') as String
+    def configs = fileTree(modulesRoot) { include '**/*.gradle' }.files
+    def excludes = ['.idea', '.gradle', 'build']
+
+    def copyTree = { File src, File dst ->
+        Files.walk(src.toPath()).forEach { p ->
+            def rel = src.toPath().relativize(p)
+            if (rel.nameCount > 0 && excludes.contains(rel.getName(0).toString())) return
+            def target = dst.toPath().resolve(rel.toString())
+            if (Files.isDirectory(p)) Files.createDirectories(target)
+            else Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    doLast {
+        def targets = identifier?.with { [it] } ?: configs.collect {
+            it.path.find(/\w+\/\w+(?=\.gradle)/).split('/') as List
+        }.groupBy { it[0] }.collectEntries { k, v ->
+            [k, v.size() > 1 ? v.findAll { it[1] != '_' }*.join('@') : [v[0][0]]]
+        }.values().flatten()
+
+        targets.each { id ->
+            def exploded = new File(repo, id)
+            if (exploded.exists()) { println "${id} already exists, skip"; return }
+            def (module, version) = id.split('@', 2) as List
+            def required = [new File(modulesRoot, "${module}/_.gradle")] + (version ? [new File(modulesRoot, "${module}/${version}.gradle")] : [])
+            def missing = required.findAll { !it.exists() }
+            if (missing) throw new GradleException("module config missing: ${missing*.path.join(', ')}\n  run :config -Pmodule=${id} first")
+            println "+ cp -R Template ${id}"
+            copyTree(template, exploded)
+            new File(exploded, 'gradlew').setExecutable(true, false)
+            new File(exploded, 'externals').mkdirs()
+        }
+    }
+}

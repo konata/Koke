@@ -1,0 +1,161 @@
+// Shared :app build logic for all Koke instances.
+// Applied from <instance>/build.gradle. `rootDir` refers to the instance root.
+// (plugins {} must live in the instance — Gradle forbids it in apply-from scripts.)
+
+import java.nio.file.Files
+import java.nio.file.Path
+
+def (String moduleId, String version) = rootProject.name.split('@', 2) as List
+def records = [version, '_'].collect { file("${rootDir}/../shared/prebuilts/${it}.pin") }.find { it.exists() }
+ext.modules = [:]
+ext.prebuilts = records.readLines().collect { it.replaceFirst(/\s*(#|\/\/).*/, '').trim() }.findAll { it && it.count('/') >= 2 }.collectEntries { { v, a, ... rg -> [(rg.reverse().join('.') + ':' + a): v] }(*it.split('/').reverse()) }
+ext.pin = { String name ->
+    def (group, artifact) = name.split('_', 2) as List
+    return prebuilts[group + ':' + artifact] ?: project.files().tap {
+        logger.info("pin('${name}'): not in ${records.name}, skipped")
+    }
+}
+
+def moduleDir = file("${rootDir}/../shared/modules/${moduleId}")
+['_', version].collect { new File(moduleDir, "${it}.gradle") }.findAll { it.exists() }.each { apply from: it }
+
+// Catalog of per-version AOSP metadata. Format: `<key>.tag=...` / `<key>.sdk=<int>`
+// where <key> is the version letter (or '_' for single-version). `sdk` → compileSdk.
+def catalogProps = new Properties().tap { p -> file("${rootDir}/../shared/catalog.properties").withInputStream { p.load(it) } }
+ext.catalog = catalogProps.stringPropertyNames().groupBy { it.split(/\./)[0] }
+    .collectEntries { k, keys -> [(k): keys.collectEntries { [(it.split(/\./)[1]): catalogProps[it]] }.tap { it.sdk = it.sdk as int }] }
+
+List<File> dirOf(File base, String pattern, String exclude, int depth) {
+    if (!base.exists()) return []
+    return base.listFiles()?.collectMany { File f -> if (depth < 0 || (exclude != null && f.name ==~ exclude)) [] else if (pattern != null && f.name ==~ pattern && f.isDirectory()) [f] else if (f.isDirectory() && pattern != null) dirOf(f, pattern, exclude, depth - 1) else []
+    } ?: []
+}
+
+// --- Android config --------------------------------------------------------
+def modules = ext.modules
+def sdk = (modules.sdk ?: catalog[version ?: '_']?.sdk) as Integer
+if (!sdk) throw new GradleException("no compileSdk resolved: set modules.sdk in <Ver>.gradle, or add '${version ?: '_'}' to shared/catalog.properties")
+
+// --- Tag verification ------------------------------------------------------
+// Warn (never throw) at configuration time — runs on every IDE Sync and every
+// task invocation — so mismatches surface as soon as you open the project.
+def expectedTag = catalog[version ?: '_']?.tag
+if (expectedTag) {
+    def base = rootDir.parentFile.toPath()
+    def targets = [[rootDir.name, moduleId]] + (modules.extraSymlinks ?: []).collect { [it.path as String, it.name as String] }
+    targets.each { targetPath, name ->
+        def target = base.resolve(targetPath)
+        if (!Files.exists(target)) return  // :link warns about missing sources
+        if (!Files.exists(target.resolve('.git'))) { logger.warn("  ⚠ ${name}: not a git repo (expected tag '${expectedTag}')"); return }
+        def proc = ['git', '-C', target.toString(), 'tag', '--points-at', 'HEAD'].execute()
+        def tags = proc.in.text.readLines()*.trim().findAll { it }
+        proc.waitFor()
+        if (!(expectedTag in tags)) logger.warn("  ⚠ ${name}: HEAD not at '${expectedTag}' (tags: ${tags ?: 'none'})")
+    }
+}
+
+android {
+    namespace modules.applicationId ?: 'koke'
+    compileSdk sdk
+
+    defaultConfig {
+        applicationId(modules.applicationId ?: 'koke')
+        minSdk sdk
+        targetSdk sdk
+        versionCode 1
+        versionName '1.0'
+    }
+
+    sourceSets {
+        main {
+            if (modules.manifest) manifest.srcFile "externals/${modules.manifest}"
+            java.srcDirs = dirOf(file('externals'), modules.src ?: 'src|java', /.*test.*/, 3)
+            res.srcDirs = dirOf(file('externals'), 'res', /.*test.*/, 3)
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions { jvmTarget = '11' }
+}
+
+// --- Tasks -----------------------------------------------------------------
+// Everything Project-scoped (file(), rootDir, modules.*) is captured at
+// configuration time; doLast closures touch only plain values so the
+// Gradle configuration cache stays happy.
+
+def jars = { int s ->
+    def androidHome = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT') ?: new Properties().tap { p ->
+        file('local.properties').withInputStream { p.load(it) }
+    }.getProperty('sdk.dir')
+    def dir = "${androidHome}/platforms/android-${s}/"
+    [official: Path.of("${dir}android.official.jar"), unsealed: Path.of("${dir}android.unsealed.jar"), using: Path.of("${dir}android.jar")]
+}
+
+// `unseal` / `restore`: swap the SDK's android.jar for a konata/UnsealedSdk variant so
+// @hide / @SystemApi symbols resolve in the IDE. Affects every project on this machine
+// sharing the same compileSdk.
+tasks.register('unseal') {
+    def triple = jars(sdk)
+    def url = "https://raw.githubusercontent.com/konata/UnsealedSdk/master/sdks/android-${sdk}.jar"
+    group = 'koke'
+    description = 'Replace SDK android.jar with unsealed variant (affects all projects)'
+    doLast {
+        assert Files.exists(triple.using): "missing ${triple.using}"
+        if (!Files.exists(triple.official)) {
+            println "*** backup using -> official ***"; Files.copy(triple.using, triple.official)
+        }
+        if (!Files.exists(triple.unsealed)) {
+            println "*** download unsealed jar: ${url} ***"
+            try {
+                triple.unsealed.withOutputStream { out -> out << new URL(url).openConnection().inputStream }
+            } finally {
+                if (Files.exists(triple.unsealed) && Files.size(triple.unsealed) == 0) {
+                    Files.delete(triple.unsealed)
+                    throw new GradleException("download failed: ${url}")
+                }
+            }
+        }
+        Files.delete(triple.using)
+        Files.copy(triple.unsealed, triple.using)
+        println "*** using = unsealed (SDK ${sdk}) ***"
+    }
+}
+
+tasks.register('restore') {
+    def triple = jars(sdk)
+    group = 'koke'
+    description = 'Restore the official android.jar backed up by :unseal'
+    doLast {
+        assert Files.exists(triple.official): "no backup at ${triple.official} — was :unseal ever run?"
+        Files.delete(triple.using)
+        Files.copy(triple.official, triple.using)
+        println "*** using = official (SDK ${sdk}) ***"
+    }
+}
+
+tasks.register('link') {
+    def externals = file('externals').toPath()
+    def base = rootDir.parentFile.toPath()
+    def targets = [[rootDir.name, moduleId]] + (modules.extraSymlinks ?: []).collect { [it.path as String, it.name as String] }
+    group = 'koke'
+    description = 'Materialize externals/ symlinks to sibling AOSP source (and extraSymlinks). Missing sources are skipped with a warning.'
+    doLast {
+        Files.createDirectories(externals)
+        Files.list(externals).withCloseable { stream ->
+            stream.filter(Files::isSymbolicLink).forEach {
+                println "unlink: $it"
+                Files.deleteIfExists(it)
+            }
+        }
+        targets.each { targetPath, name ->
+            def target = base.resolve(targetPath).toAbsolutePath()
+            if (!Files.exists(target)) { logger.warn("skip: ${name} → ${target} (not found)"); return }
+            def linkPath = externals.resolve(name)
+            println "link: $linkPath -> $target"
+            Files.createSymbolicLink(linkPath, target)
+        }
+    }
+}

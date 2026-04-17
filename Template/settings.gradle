@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// IDEA displays rootProject.name — normalize to `<module>@<version>` so single-
+// version modules also show the `@_` suffix (dir name stays `<module>`).
+def (String _id, String _ver) = rootDir.name.split('@', 2) as List
+rootProject.name = "${_id}@${_ver ?: '_'}"
