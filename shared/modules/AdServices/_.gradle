@@ -1,0 +1,11 @@
+// AdServices — base module config (shared across versions, if any).
+ext.modules = [
+    applicationId : 'koke',
+    manifest      : null,
+    src           : 'src|java',
+    extraSymlinks : [],
+]
+
+dependencies {
+    // implementation pin('androidx.appcompat_appcompat')
+}

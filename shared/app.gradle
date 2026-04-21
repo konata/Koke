@@ -21,7 +21,7 @@ def moduleDir = file("${rootDir}/../shared/modules/${moduleId}")
 
 // Catalog of per-version AOSP metadata. Format: `<key>.tag=...` / `<key>.sdk=<int>`
 // where <key> is the version letter (or '_' for single-version). `sdk` → compileSdk.
-def catalogProps = new Properties().tap { p -> file("${rootDir}/../shared/catalog.properties").withInputStream { p.load(it) } }
+def catalogProps = new Properties().tap { p -> file("${rootDir}/../../shared/catalog.properties").withInputStream { p.load(it) } }
 ext.catalog = catalogProps.stringPropertyNames().groupBy { it.split(/\./)[0] }
     .collectEntries { k, keys -> [(k): keys.collectEntries { [(it.split(/\./)[1]): catalogProps[it]] }.tap { it.sdk = it.sdk as int }] }
 
