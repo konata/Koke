@@ -29,10 +29,6 @@ tasks.register('config') {
                 |""".stripMargin())
         if (version) write(new File(modulesRoot, "${module}/${version}.gradle"), """\
                 |// ${module} @ ${version}
-                |ext.modules += [
-                |    sdk : 35,
-                |]
-                |
                 |dependencies {
                 |    // implementation pin('androidx.work_work-runtime')
                 |}

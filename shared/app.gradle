@@ -5,25 +5,25 @@
 import java.nio.file.Files
 import java.nio.file.Path
 
-def (String moduleId, String version) = rootProject.name.split('@', 2) as List
-def records = [version, '_'].collect { file("${rootDir}/../shared/prebuilts/${it}.pin") }.find { it.exists() }
-ext.modules = [:]
-ext.prebuilts = records.readLines().collect { it.replaceFirst(/\s*(#|\/\/).*/, '').trim() }.findAll { it && it.count('/') >= 2 }.collectEntries { { v, a, ... rg -> [(rg.reverse().join('.') + ':' + a): v] }(*it.split('/').reverse()) }
-ext.pin = { String name ->
-    def (group, artifact) = name.split('_', 2) as List
-    return prebuilts[group + ':' + artifact] ?: project.files().tap {
-        logger.info("pin('${name}'): not in ${records.name}, skipped")
+def (moduleId, version) = rootProject.name.split('@', 2) as List
+ext {
+    def pinFile = [version, '_'].collect { file("${rootDir}/../shared/prebuilts/${it}.pin") }.find { it.exists() }
+    def catalogFile = file("${rootDir}/../shared/catalog.properties")
+    def catalogProps = new Properties().tap { p -> catalogFile.withInputStream { p.load(it) } }
+    modules = [:]
+    prebuilts = pinFile.readLines().collect { it.replaceFirst(/\s*(#|\/\/).*/, '').trim() }.findAll { it && it.count('/') >= 2 }.collectEntries { { v, a, ... rg -> [(rg.reverse().join('.') + ':' + a): v] }(*it.split('/').reverse()) }
+    catalog = catalogProps.stringPropertyNames().groupBy { it.split(/\./)[0] }.collectEntries { k, keys -> [(k): keys.collectEntries { [(it.split(/\./)[1]): catalogProps[it]] }.tap { it.sdk = it.sdk as int }] }
+    pin = { String name ->
+        def (group, artifact) = name.split('_', 2) as List
+        return prebuilts[group + ':' + artifact] ?: project.files().tap {
+            logger.info("pin('${name}'): not in ${pinFile.name}, skipped")
+        }
     }
 }
 
-def moduleDir = file("${rootDir}/../shared/modules/${moduleId}")
-['_', version].collect { new File(moduleDir, "${it}.gradle") }.findAll { it.exists() }.each { apply from: it }
-
-// Catalog of per-version AOSP metadata. Format: `<key>.tag=...` / `<key>.sdk=<int>`
-// where <key> is the version letter (or '_' for single-version). `sdk` → compileSdk.
-def catalogProps = new Properties().tap { p -> file("${rootDir}/../../shared/catalog.properties").withInputStream { p.load(it) } }
-ext.catalog = catalogProps.stringPropertyNames().groupBy { it.split(/\./)[0] }
-    .collectEntries { k, keys -> [(k): keys.collectEntries { [(it.split(/\./)[1]): catalogProps[it]] }.tap { it.sdk = it.sdk as int }] }
+['_', version].collect { new File(file("${rootDir}/../shared/modules/${moduleId}"), "${it}.gradle") }.findAll { it.exists() }.each {
+    apply from: it
+}
 
 List<File> dirOf(File base, String pattern, String exclude, int depth) {
     if (!base.exists()) return []
@@ -39,18 +39,21 @@ if (!sdk) throw new GradleException("no compileSdk resolved: set modules.sdk in 
 // --- Tag verification ------------------------------------------------------
 // Warn (never throw) at configuration time — runs on every IDE Sync and every
 // task invocation — so mismatches surface as soon as you open the project.
-def expectedTag = catalog[version ?: '_']?.tag
-if (expectedTag) {
-    def base = rootDir.parentFile.toPath()
+def tag = catalog[version ?: '_']?.tag
+if (tag) {
+    def externals = file("externals").toPath()
     def targets = [[rootDir.name, moduleId]] + (modules.extraSymlinks ?: []).collect { [it.path as String, it.name as String] }
+
     targets.each { targetPath, name ->
-        def target = base.resolve(targetPath)
+        def target = externals.resolve(targetPath)
         if (!Files.exists(target)) return  // :link warns about missing sources
-        if (!Files.exists(target.resolve('.git'))) { logger.warn("  ⚠ ${name}: not a git repo (expected tag '${expectedTag}')"); return }
+        if (!Files.exists(target.resolve('.git'))) {
+            logger.warn("  ⚠ ${name}: not a git repo (expected tag '${tag}')"); return
+        }
         def proc = ['git', '-C', target.toString(), 'tag', '--points-at', 'HEAD'].execute()
         def tags = proc.in.text.readLines()*.trim().findAll { it }
         proc.waitFor()
-        if (!(expectedTag in tags)) logger.warn("  ⚠ ${name}: HEAD not at '${expectedTag}' (tags: ${tags ?: 'none'})")
+        if (!(tag in tags)) logger.warn("  ⚠ ${name}: HEAD not at '${tag}' (tags: ${tags ?: 'none'})")
     }
 }
 
@@ -138,9 +141,8 @@ tasks.register('restore') {
 
 tasks.register('link') {
     def externals = file('externals').toPath()
-    def base = rootDir.parentFile.toPath()
-    def targets = [[rootDir.name, moduleId]] + (modules.extraSymlinks ?: []).collect { [it.path as String, it.name as String] }
-    group = 'koke'
+    def base = rootDir.parentFile.parentFile.toPath()
+    def links = [[rootDir.name, moduleId]] + (modules.extraSymlinks ?: []).collect { [it.path as String, it.name as String] }
     description = 'Materialize externals/ symlinks to sibling AOSP source (and extraSymlinks). Missing sources are skipped with a warning.'
     doLast {
         Files.createDirectories(externals)
@@ -150,12 +152,14 @@ tasks.register('link') {
                 Files.deleteIfExists(it)
             }
         }
-        targets.each { targetPath, name ->
-            def target = base.resolve(targetPath).toAbsolutePath()
-            if (!Files.exists(target)) { logger.warn("skip: ${name} → ${target} (not found)"); return }
-            def linkPath = externals.resolve(name)
-            println "link: $linkPath -> $target"
-            Files.createSymbolicLink(linkPath, target)
+        links.each { symbolLink, original ->
+            def to = externals.resolve(symbolLink).toAbsolutePath()
+            def source = base.resolve(original)
+            if (!Files.exists(source) || Files.exists(to)) {
+                logger.warn("skip: ${source} → ${to} (not found)"); return
+            }
+            println "link: $source -> $to"
+            Files.createSymbolicLink(to, source)
         }
     }
 }

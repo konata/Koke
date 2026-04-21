@@ -18,7 +18,7 @@ Koke/                              # this repo
 │   ├── modules/
 │   │   ├── MediaProvider/
 │   │   │   ├── _.gradle             # common across versions
-│   │   │   ├── V.gradle             # V-specific (sdk override, extra deps)
+│   │   │   ├── V.gradle             # V-specific overrides / extra deps
 │   │   │   └── B.gradle
 │   │   ├── Permission/{_,V}.gradle
 │   │   └── Profiling/_.gradle       # single-version: just _.gradle
@@ -43,10 +43,18 @@ Each instance's AOSP checkout lives as a **sibling of the Koke repo**,
 named identically:
 
 ```
-Koke/                 # this repo
-MediaProvider/        # AOSP checkout  ─┐
-Profiling/            # AOSP checkout  ─┴  matches instance names inside /
+~/Koke/                     # workspace (parent dir)
+├── Koke/                   # this repo — IDE instances live inside
+│   ├── MediaProvider@V/    # IDE project
+│   └── Profiling/
+├── MediaProvider/          # AOSP checkout  ─┐
+└── Profiling/              # AOSP checkout  ─┴  matches moduleId
 ```
+
+`:link` resolves `~/Koke/<moduleId>/` for the primary symlink and
+`~/Koke/<path>/` for each `extraSymlinks` entry. Missing sources are
+skipped with a warning — `:link` never fails, you just won't see the
+unresolved sources.
 
 ## Workflow
 
@@ -76,6 +84,9 @@ Then, inside the instance:
 
 `_.gradle` holds version-invariant fields; each `<Ver>.gradle` adds
 version-specific overrides via `+=`. Adding a new version is append-only.
+`applicationId` defaults to `koke` (also used as `namespace`); override per
+module only when the real AOSP id matters (e.g. resolving a bundled
+`AndroidManifest.xml`).
 
 ```groovy
 // shared/modules/MediaProvider/_.gradle
@@ -93,8 +104,6 @@ dependencies {
 
 ```groovy
 // shared/modules/MediaProvider/V.gradle
-ext.modules += [sdk: 35]
-
 dependencies {
     implementation pin('androidx.work_work-runtime')
 }
