@@ -107,7 +107,7 @@ use shared defaults; they are starting points, not complete AOSP dependency grap
 | Change a module's sources, resources or dependencies | Sync; rerun `make` if you also want its summary |
 | Add or change extra source links | Rerun `make -Pmodule=...`, then Sync |
 | Switch the checkout's Git revision | Open the matching profile if applicable, then Sync |
-| Update `gradle/app.gradle` | Existing instances use it on their next Gradle configuration |
+| Update `seed.gradle` | Existing instances use it on their next Gradle configuration |
 | Change `seed/` | New instances receive it; existing instance files are not overwritten |
 
 `./gradlew make` prepares one **unversioned** instance for each `profile/*.gradle`
@@ -138,7 +138,7 @@ the generated instance's build script, so the instance stays reproducible.
 ## Configuration recipes
 
 `modules` is Koke's configuration map, available in each profile script.
-Its fields are consumed by `gradle/app.gradle`; they are not Android Gradle
+Its fields are consumed by `seed.gradle`; they are not Android Gradle
 Plugin properties.
 
 ### Use the repository's manifest
@@ -369,9 +369,9 @@ Each command is invoked through that directory's `./gradlew`.
 ```text
 Koke/
 ├── build.gradle                  # config / make orchestration
+├── seed.gradle                   # shared IDE model, links and SDK tasks
 ├── gradle/
-│   ├── wrapper/                  # root Gradle wrapper
-│   └── app.gradle                # IDE model, links and SDK tasks
+│   └── wrapper/                  # root Gradle wrapper
 ├── seed/                         # initial files copied into new instances
 ├── catalog/
 │   ├── versions.properties       # SDK / expected Git ref per version
@@ -384,7 +384,7 @@ Koke/
 ```
 
 Each directory under `modules/` is an independent Gradle project. Open that
-directory in Android Studio. Changes to profiles, catalogs and `gradle/app.gradle`
+directory in Android Studio. Changes to profiles, catalogs and `seed.gradle`
 take effect on the next Gradle configuration; `seed/` is copied only when a new
 project is created. Keep IDE state and local settings in `modules/`, and commit
 reusable module settings to `profile/`.
@@ -393,7 +393,7 @@ When moving an older instance from `Koke/<Name>` to `Koke/modules/<Name>`, prese
 its files and change its `build.gradle` script reference to:
 
 ```groovy
-apply from: "${rootDir}/../../gradle/app.gradle"
+apply from: "${rootDir}/../../seed.gradle"
 ```
 
 Then run `./gradlew make -Pmodule=Name` from the Koke root and reopen the new

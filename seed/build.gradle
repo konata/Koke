@@ -3,4 +3,4 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
-apply from: "${rootDir}/../../gradle/app.gradle"
+apply from: "${rootDir}/../../seed.gradle"
