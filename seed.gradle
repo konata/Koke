@@ -213,6 +213,6 @@ tasks.register('link') {
         def incomplete = links.values().any { !it.isDirectory() } || missing || (automatic && sources.empty)
         if (incomplete) println '  Preparation incomplete.'
         println "  Open in Android Studio: ${instance}"
-        println incomplete ? '  Next: correct the missing sources or paths, then rerun make.' : '  Next: Sync in Android Studio.'
+        println incomplete ? "  Next: correct the missing sources or paths, then rerun ./koke apply ${instance.name} from the Koke root." : '  Next: Sync in Android Studio.'
     }
 }

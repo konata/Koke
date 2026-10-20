@@ -1,45 +1,37 @@
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-tasks.register('config') {
+tasks.register('apply') {
     group = 'koke'
-    description = 'Create module profiles. Requires -Pmodule=<Name>[@<Version>].'
-    def profiles = new File(rootDir, 'profile')
-    def identifier = findProperty('module') as String
-    doLast {
-        if (!identifier) throw new GradleException(':config requires -Pmodule=<Name>[@<Version>]')
-        def module = identifier.split('@', 2).first()
-        [module, identifier].unique().each { name ->
-            def profile = new File(profiles, "${name}.gradle")
-            if (profile.exists()) return
-            profile.parentFile.mkdirs()
-            profile.text = name == module ? "// ${module}: base profile.\n" : "// ${name}: version overrides.\n"
-            println "+ ${profile}"
-        }
-    }
-}
-
-tasks.register('make') {
-    group = 'koke'
-    description = 'Prepare and link instances. -Pmodule=<Name>[@<Version>] for one, omit for all modules.'
+    description = 'Prepare a named module, or create missing modules from base profiles. Use ./koke apply [Name[@Version]].'
     def repo = rootDir
     def profiles = new File(repo, 'profile')
     def seed = new File(repo, 'seed')
     def identifier = findProperty('module') as String
-    def targets = identifier ? [identifier] : fileTree(profiles) {
+    def defaults = fileTree(profiles) {
         include '*.gradle'
         exclude '*@*.gradle'
-    }.files.collect { it.name - '.gradle' }.sort()
+    }
     def excludes = ['.idea', '.gradle', 'build']
     def arguments = ['--console=plain', '--warn', 'link'] + (gradle.startParameter.offline ? ['--offline'] : [])
 
     doLast {
-        targets.each { name ->
+        if (identifier != null && !(identifier ==~ /\w[\w.-]*(@\w[\w.-]*)?/)) {
+            throw new GradleException('expected <Name>[@<Version>]; use ./koke apply MediaProvider or ./koke apply MediaProvider@V')
+        }
+        def modules = identifier != null ? [identifier] : defaults.files.collect { it.name - '.gradle' }.sort()
+        modules.each { name ->
             def instance = new File(repo, "modules/${name}")
+            if (identifier == null && instance.exists()) return
+
             def module = name.split('@', 2).first()
-            def required = [module, name].unique().collect { new File(profiles, "${it}.gradle") }
-            def missing = required.findAll { !it.isFile() }
-            if (missing) throw new GradleException("module profile missing: ${missing*.path.join(', ')}\n  run :config -Pmodule=${name} first")
+            [module, name].unique().each { variant ->
+                def profile = new File(profiles, "${variant}.gradle")
+                if (profile.exists()) return
+                profile.parentFile.mkdirs()
+                profile.text = variant == module ? "// ${module}: base profile.\n" : "// ${variant}: version overrides.\n"
+                println "+ ${profile}"
+            }
             if (!instance.exists()) {
                 println "+ cp -R seed modules/${name}"
                 Files.walk(seed.toPath()).withCloseable { paths ->

@@ -4,7 +4,7 @@ Read one AOSP repository in its own Android Studio project, without building AOS
 Koke connects an existing checkout to a small Gradle project and supplies source
 roots, an Android SDK and the Maven dependencies you configure.
 
-The normal workflow is **prepare the checkout → `make` → open and Sync**.
+The normal workflow is **prepare the checkout → `./koke apply Name` → open and Sync**.
 Optional version profiles select different configurations while sharing the same
 checkout. Koke never clones repositories or switches Git revisions.
 
@@ -56,12 +56,13 @@ warning if the checkout does not match; Koke does not change it.
 Run from the Koke root:
 
 ```bash
-./gradlew make -Pmodule=MediaProvider
+./koke apply MediaProvider
 ```
 
-MediaProvider already has `profile/MediaProvider.gradle`. `make` creates its
-instance if needed, then runs that instance's `link` task to connect the source.
-Running it again preserves the instance's files and refreshes its links.
+MediaProvider already has `profile/MediaProvider.gradle`. Koke creates any missing
+profile and instance, then runs that instance's `link` task to connect the source.
+Running it again preserves existing profiles and instance files and refreshes
+the links.
 
 The preparation summary shows:
 
@@ -87,7 +88,7 @@ Koke: Example
 
 Missing source trees or configured paths are reported as **Preparation incomplete**.
 They remain warnings so you can prepare an instance before obtaining its source.
-Invalid Gradle configuration or a failed child task makes `make` fail.
+Invalid Gradle configuration or a failed child task makes the command fail.
 
 ### 3. Open and Sync
 
@@ -103,33 +104,47 @@ use shared defaults; they are starting points, not complete AOSP dependency grap
 
 | Change | What to do |
 | --- | --- |
+| Clone Koke or pull new profiles | Run `./koke apply` to create missing unversioned instances |
 | Continue reading the same checkout | Open the existing IDE project |
-| Change a module's sources, resources or dependencies | Sync; rerun `make` if you also want its summary |
-| Add or change extra source links | Rerun `make -Pmodule=...`, then Sync |
+| Change a module's sources, resources or dependencies | Sync; rerun `./koke apply Name` if you also want its summary |
+| Add or change extra source links | Rerun `./koke apply Name`, then Sync |
 | Switch the checkout's Git revision | Open the matching profile if applicable, then Sync |
 | Update `seed.gradle` | Existing instances use it on their next Gradle configuration |
 | Change `seed/` | New instances receive it; existing instance files are not overwritten |
 
-`./gradlew make` prepares one **unversioned** instance for each `profile/*.gradle`
-file whose name has no `@`. Version overrides are selected explicitly.
-Use a named module during setup or diagnosis to keep the output focused.
-`--offline` is forwarded to the instance build; its Gradle distribution and plugins
-must already be cached.
+With a name, `apply` prepares that module and refreshes its links. Without a name,
+it creates missing instances for the base `profile/*.gradle` files:
+
+```bash
+./koke apply
+```
+
+Batch preparation skips existing instances entirely, preserving their files and
+links. Version profiles such as `MediaProvider@V` are selected explicitly.
+Use `./koke apply Name` to refresh an existing instance. Run `./koke` or
+`./koke --help` for usage. Gradle options follow the optional module name:
+
+```bash
+./koke apply MediaProvider --offline
+./koke apply --offline
+```
+
+`--offline` is also forwarded to the instance build; both Gradle distributions and
+the instance's plugins must already be cached.
 
 ## Add a module
 
-Configuration is a one-time maintainer step. From the Koke root:
+Place the source checkout next to Koke, select its Git revision, then run:
 
 ```bash
-./gradlew config -Pmodule=Example
-# Edit profile/Example.gradle only if defaults need changing.
-# Place the source checkout at ../Example and select its Git revision.
-./gradlew make -Pmodule=Example
+./koke apply Example
 ```
 
-The presence of `profile/Example.gradle` declares the module. A comment-only
-file is enough when defaults work. `config` creates that flat file and preserves
-existing files. It does not infer dependencies from `Android.bp`.
+This creates `profile/Example.gradle` if absent and prepares `modules/Example/`.
+A comment-only profile is enough when defaults work. If defaults need changing,
+edit the profile and run the same command again. You can also write the profile
+before the first invocation. Koke preserves existing profiles and does not infer
+dependencies from `Android.bp`.
 
 Start with the smallest config, inspect the preparation summary, then add only
 known source roots and dependencies. Store changes in `profile/`, not in
@@ -247,7 +262,7 @@ modules.sources = ['src', '../Helper/java']
 ```
 
 Koke normalizes these paths relative to the main link before following symlinks.
-Rerun `make` after editing extra links. `externals/` is managed by Koke: `link`
+Rerun `./koke apply Name` after editing extra links. `externals/` is managed by Koke: `link`
 replaces its symlinks and refuses to overwrite real files or directories. Keep
 hand-written files in the source checkout, not under `externals/`.
 
@@ -265,15 +280,15 @@ change the checkout or make its APIs compatible with a different Android release
 Use `IntentResolver@B` and `IntentResolver@V` when different releases need different
 SDKs, dependency versions or module settings. Ordinary modules can stay unversioned.
 
-Create the optional configs once:
+Prepare the selected version directly:
 
 ```bash
-./gradlew config -Pmodule=IntentResolver@B
-./gradlew config -Pmodule=IntentResolver@V
+# Manually switch ../IntentResolver to the release required by V first.
+./koke apply IntentResolver@V
 ```
 
-This creates `profile/IntentResolver.gradle` if absent, plus
-`profile/IntentResolver@B.gradle` and `profile/IntentResolver@V.gradle`.
+This creates any missing `profile/IntentResolver.gradle` and
+`profile/IntentResolver@V.gradle`, then prepares `modules/IntentResolver@V/`.
 The base `IntentResolver.gradle` runs once, followed by the chosen version script.
 Keep common dependencies in the base file and version-specific dependencies in
 the version file. For example:
@@ -292,16 +307,15 @@ entries remain available; later entries for the same artifact win. These catalog
 are shared by all modules using that profile, so keep module-specific dependency
 selection in the module script.
 
-Prepare a profile explicitly:
+To work on B later, switch the checkout and prepare that version:
 
 ```bash
 # Manually switch ../IntentResolver to the release required by the B config first.
-./gradlew make -Pmodule=IntentResolver@B
+./koke apply IntentResolver@B
 ```
 
-Open `modules/IntentResolver@B/` in Android Studio. Both the base profile and the
-selected version file must exist; Koke reports a missing profile before creating
-the project.
+Open `modules/IntentResolver@B/` in Android Studio. Koke creates a missing version
+profile and preserves the existing base profile.
 
 Both profiles link `externals/IntentResolver` to the **same** `workspace/IntentResolver`
 checkout. Switching that checkout changes the source visible to both projects.
@@ -331,7 +345,7 @@ To return to the saved official `android.jar` later:
 ```
 
 `unseal` uses [konata/UnsealedSdk](https://github.com/konata/UnsealedSdk) and affects
-**every project using that SDK**. It is never run automatically by `make`, `link`
+**every project using that SDK**. It is never run automatically by `./koke`, `link`
 or Sync.
 
 Koke validates the downloaded or cached JAR, saves the original as
@@ -343,32 +357,36 @@ symbols; it does not generate AIDL, proto, resource or other build-generated cod
 
 | Symptom | Check |
 | --- | --- |
-| `module profile missing` | Run `config -Pmodule=...`; an explicit profile needs both common and version files |
-| Source marked `[missing]` | Check the sibling checkout's name and location, then rerun `make` |
+| `expected <Name>[@<Version>]` | Pass a module name, for example `./koke apply MediaProvider@V`; put Gradle options after it |
+| Source marked `[missing]` | Check the sibling checkout's name and location, then rerun `./koke apply Name` |
 | No Java/Kotlin roots | Confirm the checkout contains JVM code; declare unusual roots with `modules.sources` |
 | `Missing path` | Correct the relative source/resource/manifest path in the module config |
 | Expected Git ref warning | Check the source revision and selected profile; Koke only checks local refs |
 | SDK location or platform missing | Set `ANDROID_HOME` or the instance's `sdk.dir`, and install the selected SDK |
 | Pins skipped | Supply the relevant source or Maven dependency if you need those symbols |
 | Sync works but some symbols stay unresolved | Check missing roots, dependency declarations, hidden APIs and generated-code requirements separately |
-| Existing project keeps old seed files | `make` preserves them; apply needed seed changes explicitly or generate a new instance after preserving local settings |
-| An old version-suffixed link remains | Rerun `make` to recreate stable `externals/<Module>` links |
+| Existing project keeps old seed files | Koke preserves them; apply needed seed changes explicitly or generate a new instance after preserving local settings |
+| An old version-suffixed link remains | Rerun `./koke apply Name` to recreate stable `externals/<Module>` links |
 
 ## Commands and layout
 
 | Run from | Command | Effect |
 | --- | --- | --- |
-| Koke root | `config -Pmodule=Name[@Version]` | Create absent base and optional version profile files |
-| Koke root | `make -Pmodule=Name[@Version]` | Prepare `modules/Name[@Version]`, link sources, print its summary |
-| Koke root | `make` | Prepare the unversioned instance of every configured module |
-| Instance | `link` | Refresh source links and print the same summary |
-| Instance | `unseal` / `restore` | Explicitly change the shared SDK JAR |
+| Koke root | `./koke apply Name[@Version]` | Create missing profiles, prepare the instance, link sources and print its summary |
+| Koke root | `./koke apply` | Create missing unversioned instances from existing profiles; skip existing instances |
+| Koke root | `./koke --help` | Show command usage |
+| Instance | `./gradlew link` | Refresh source links and print the same summary |
+| Instance | `./gradlew unseal` / `./gradlew restore` | Explicitly change the shared SDK JAR |
 
-Each command is invoked through that directory's `./gradlew`.
+`koke` is a small shell launcher for `./gradlew apply -Pmodule=Name[@Version]`.
+All preparation logic lives in Gradle. The root Gradle `apply` task also works
+directly, including from Android Studio; omit `-Pmodule` to create missing
+unversioned instances, or pass it to prepare one module.
 
 ```text
 Koke/
-├── build.gradle                  # config / make orchestration
+├── koke                          # command-line entry point
+├── build.gradle                  # apply orchestration
 ├── seed.gradle                   # shared IDE model, links and SDK tasks
 ├── gradle/
 │   └── wrapper/                  # root Gradle wrapper
@@ -396,5 +414,5 @@ its files and change its `build.gradle` script reference to:
 apply from: "${rootDir}/../../seed.gradle"
 ```
 
-Then run `./gradlew make -Pmodule=Name` from the Koke root and reopen the new
+Then run `./koke apply Name` from the Koke root and reopen the new
 project path in Android Studio. The sibling source checkout stays in place.
