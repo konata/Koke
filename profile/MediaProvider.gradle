@@ -1,0 +1,2 @@
+modules.applicationId = 'com.android.providers.media.module'
+modules.manifest = 'AndroidManifest.xml'

@@ -1,0 +1,218 @@
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.jar.JarFile
+
+import static java.nio.file.StandardCopyOption.*
+
+def (module, version) = rootDir.name.split('@', 2) as List
+version = version ?: '_'
+def koke = rootDir.parentFile.parentFile
+def variants = ['_', version].unique()
+def catalog = new Properties()
+new File(koke, 'catalog/versions.properties').withInputStream { catalog.load(it) }
+
+def coordinates = [:]
+variants.collect { new File(koke, "catalog/pins/${it}.pin") }.findAll { it.exists() }.each { pins ->
+    pins.readLines().each { line ->
+        def path = line.replaceFirst(/\s*(#|\/\/).*/, '').trim()
+        if (!path) return
+        def segments = path.tokenize('/')
+        def release = segments.removeLast()
+        def artifact = segments.removeLast()
+        def coordinate = segments.join('.') + ':' + artifact
+        coordinates[coordinate] = "${coordinate}:${release}".toString()
+    }
+}
+
+ext.modules = [
+    applicationId: 'koke',
+    src: 'src|java',
+    exclude: /.*test.*|\.git|\.gradle|\.idea|build|out/,
+    extraSymlinks: [],
+]
+def pinned = [:]
+def skipped = [] as Set
+ext.pin = { String name ->
+    def (group, artifact) = name.split('_', 2) as List
+    def coordinate = coordinates[group + ':' + artifact]
+    if (coordinate) {
+        pinned[name] = coordinate
+        return coordinate
+    }
+    skipped.add(name)
+    logger.info("pin('${name}'): no Maven coordinate, skipped")
+    project.files()
+}
+
+[module, rootDir.name].unique().each { apply from: new File(koke, "profile/${it}.gradle") }
+def config = ext.modules
+def sdk = (config.sdk ?: catalog["${version}.sdk".toString()]) as Integer
+if (!sdk) throw new GradleException("no compileSdk: set modules.sdk or '${version}.sdk' in catalog/versions.properties")
+
+def externals = file('externals')
+def source = new File(externals, module)
+def relative = { String path -> source.toPath().resolve(path).normalize().toFile() }
+def siblings = koke.parentFile
+def links = [(module): new File(siblings, module)]
+config.extraSymlinks.each { links[it.name] = new File(siblings, it.path) }
+
+// Profiles share a checkout. Only the user changes its Git revision.
+def revision = { File checkout, String reference ->
+    def git = providers.exec {
+        workingDir checkout
+        commandLine 'git', 'rev-parse', '--verify', "${reference}^{commit}"
+        ignoreExitValue = true
+    }
+    git.result.get().exitValue == 0 ? git.standardOutput.asText.get().trim() : null
+}
+def tag = catalog["${version}.tag".toString()]
+if (tag) links.each { name, checkout ->
+    if (!checkout.exists()) return
+    def expected = revision(checkout, tag)
+    if (!expected || revision(checkout, 'HEAD') != expected) {
+        logger.warn("${name}: checkout does not match '${tag}'; switch it manually for this profile")
+    }
+}
+
+List<File> roots(File directory, String pattern, String exclude) {
+    if (!directory.exists()) return []
+    directory.listFiles().findAll { it.isDirectory() && !(it.name ==~ exclude) }.collectMany {
+        it.name ==~ pattern ? [it] : roots(it, pattern, exclude)
+    }
+}
+
+// Discover in the checkout so the first :link can report roots before any IDE Sync.
+def sources = config.sources != null ? config.sources.collect(relative) :
+    links.collectMany { name, checkout ->
+        roots(checkout, config.src, config.exclude).findAll {
+            !fileTree(it) { include '**/*.java', '**/*.kt' }.isEmpty()
+        }.collect { new File(externals, "${name}/${checkout.toPath().relativize(it.toPath())}") }
+    }
+def resources = config.resources != null ? config.resources.collect(relative) :
+    links.collectMany { name, checkout ->
+        roots(checkout, 'res', config.exclude).collect {
+            new File(externals, "${name}/${checkout.toPath().relativize(it.toPath())}")
+        }
+    }
+
+android {
+    namespace config.applicationId
+    compileSdk sdk
+
+    defaultConfig {
+        applicationId config.applicationId
+        minSdk sdk
+        targetSdk sdk
+    }
+
+    sourceSets {
+        main {
+            if (config.manifest) manifest.srcFile relative(config.manifest)
+            java.srcDirs = sources
+            res.srcDirs = resources
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions { jvmTarget = '11' }
+}
+
+def jars = {
+    def platform = android.sdkDirectory.toPath().resolve("platforms/android-${sdk}")
+    [official: platform.resolve('android.official.jar'), unsealed: platform.resolve('android.unsealed.jar'),
+     using: platform.resolve('android.jar')]
+}
+
+def install = { Path archive, Path platform ->
+    def pending = Files.createTempFile(platform.parent, '.android-', '.jar')
+    try {
+        Files.copy(archive, pending, REPLACE_EXISTING)
+        Files.move(pending, platform, ATOMIC_MOVE, REPLACE_EXISTING)
+    } finally {
+        Files.deleteIfExists(pending)
+    }
+}
+
+tasks.register('unseal') {
+    def platform = jars()
+    def url = "https://raw.githubusercontent.com/konata/UnsealedSdk/master/sdks/android-${sdk}.jar"
+    group = 'koke'
+    description = 'Replace SDK android.jar with unsealed variant (affects all projects)'
+    doLast {
+        if (!Files.exists(platform.using)) throw new GradleException("missing ${platform.using}")
+        if (!Files.exists(platform.unsealed)) {
+            def pending = Files.createTempFile(platform.unsealed.parent, '.unsealed-', '.jar')
+            try {
+                new URL(url).withInputStream { stream -> Files.copy(stream, pending, REPLACE_EXISTING) }
+                new JarFile(pending.toFile()).withCloseable { archive ->
+                    if (!archive.getEntry('android/app/Activity.class')) throw new GradleException("invalid Android SDK jar: ${url}")
+                }
+                Files.move(pending, platform.unsealed, ATOMIC_MOVE, REPLACE_EXISTING)
+            } finally {
+                Files.deleteIfExists(pending)
+            }
+        }
+        new JarFile(platform.unsealed.toFile()).withCloseable { archive ->
+            if (!archive.getEntry('android/app/Activity.class')) throw new GradleException("invalid Android SDK jar: ${platform.unsealed}")
+        }
+        if (!Files.exists(platform.official)) install(platform.using, platform.official)
+        install(platform.unsealed, platform.using)
+        println "Using unsealed SDK ${sdk} (all projects)"
+    }
+}
+
+tasks.register('restore') {
+    def platform = jars()
+    group = 'koke'
+    description = 'Restore the official android.jar backed up by :unseal'
+    doLast {
+        if (!Files.exists(platform.official)) throw new GradleException("no backup at ${platform.official}; run :unseal first")
+        install(platform.official, platform.using)
+        println "Restored official SDK ${sdk}"
+    }
+}
+
+tasks.register('link') {
+    def instance = rootDir
+    def manifest = config.manifest ? relative(config.manifest) : null
+    def automatic = config.sources == null
+    group = 'koke'
+    description = 'Link sibling checkouts and report source roots, SDK and pin mappings'
+    doLast {
+        Files.createDirectories(externals.toPath())
+        Files.list(externals.toPath()).withCloseable { paths ->
+            paths.filter(Files::isSymbolicLink).forEach { Files.delete(it) }
+        }
+        links.each { name, checkout ->
+            def link = new File(externals, name).toPath()
+            if (!checkout.exists()) {
+                logger.warn("missing source: ${checkout}")
+                return
+            }
+            if (Files.exists(link)) throw new GradleException("cannot replace non-symlink: ${link}")
+            Files.createSymbolicLink(link, checkout.toPath())
+        }
+        println "\nKoke: ${instance.name}"
+        links.each { name, checkout ->
+            println "  Source: ${checkout} -> externals/${name}${checkout.isDirectory() ? '' : ' [missing]'}"
+        }
+        println "  SDK: android-${sdk}${tag ? "; expected Git ref: ${tag}" : ''}"
+        println "  Sources: ${sources.size()} roots (${automatic ? 'automatic' : 'explicit'})"
+        println "  Resources: ${resources.size()} roots"
+        if (manifest) println "  Manifest: ${manifest}"
+        println "  Pins: ${pinned.size()} mapped, ${skipped.size()} skipped"
+        pinned.each { name, coordinate -> logger.info("  ${name} -> ${coordinate}") }
+        skipped.each { println "    ${it}: no Maven coordinate; symbols need source or another dependency" }
+        (sources + resources).each { logger.info("  Root: ${it}") }
+        def missing = (sources + resources + (manifest ? [manifest] : [])).findAll { !it.exists() }
+        missing.each { println "  Missing path: ${it}" }
+        if (automatic && sources.empty) println '  No Java/Kotlin roots found; check the checkout and modules.sources.'
+        def incomplete = links.values().any { !it.isDirectory() } || missing || (automatic && sources.empty)
+        if (incomplete) println '  Preparation incomplete.'
+        println "  Open in Android Studio: ${instance}"
+        println incomplete ? '  Next: correct the missing sources or paths, then rerun make.' : '  Next: Sync in Android Studio.'
+    }
+}
