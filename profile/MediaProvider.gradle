@@ -1,2 +1,4 @@
-modules.applicationId = 'com.android.providers.media.module'
-modules.manifest = 'AndroidManifest.xml'
+self {
+    applicationId = 'com.android.providers.media.module'
+    manifest = 'AndroidManifest.xml'
+}

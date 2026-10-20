@@ -24,12 +24,12 @@ variants.collect { new File(koke, "catalog/pins/${it}.pin") }.findAll { it.exist
     }
 }
 
-ext.modules = [
+extensions.add('self', [
     applicationId: 'koke',
     src: 'src|java',
     exclude: /.*test.*|\.git|\.gradle|\.idea|build|out/,
     extraSymlinks: [],
-]
+])
 def pinned = [:]
 def skipped = [] as Set
 ext.pin = { String name ->
@@ -45,9 +45,9 @@ ext.pin = { String name ->
 }
 
 [module, rootDir.name].unique().each { apply from: new File(koke, "profile/${it}.gradle") }
-def config = ext.modules
+def config = self
 def sdk = (config.sdk ?: catalog["${version}.sdk".toString()]) as Integer
-if (!sdk) throw new GradleException("no compileSdk: set modules.sdk or '${version}.sdk' in catalog/versions.properties")
+if (!sdk) throw new GradleException("no compileSdk: set self.sdk or '${version}.sdk' in catalog/versions.properties")
 
 def externals = file('externals')
 def source = new File(externals, module)
@@ -209,7 +209,7 @@ tasks.register('link') {
         (sources + resources).each { logger.info("  Root: ${it}") }
         def missing = (sources + resources + (manifest ? [manifest] : [])).findAll { !it.exists() }
         missing.each { println "  Missing path: ${it}" }
-        if (automatic && sources.empty) println '  No Java/Kotlin roots found; check the checkout and modules.sources.'
+        if (automatic && sources.empty) println '  No Java/Kotlin roots found; check the checkout and self.sources.'
         def incomplete = links.values().any { !it.isDirectory() } || missing || (automatic && sources.empty)
         if (incomplete) println '  Preparation incomplete.'
         println "  Open in Android Studio: ${instance}"
